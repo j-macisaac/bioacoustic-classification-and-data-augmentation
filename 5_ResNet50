@@ -1,0 +1,255 @@
+import os, itertools, pickle, warnings, random
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+import tensorflow as tf
+import tensorflow_io as tfio
+from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
+from tensorflow.keras import models, layers, mixed_precision
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ModelCheckpoint, CSVLogger
+
+
+policy = mixed_precision.Policy('mixed_float16')
+mixed_precision.set_global_policy(policy)
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
+np.set_printoptions(precision=4)
+    
+       
+height, width = 224, 224
+wl, hop = 1024, 512
+arch = 'resNet50'
+batch_size = 32
+AUTO = tf.data.AUTOTUNE
+
+train_dir = "train_data/train/"
+val_dir = "train_data/val/"
+test_dir = "train_data/test/"
+folders = np.array(tf.io.gfile.listdir(str(test_dir)))
+classes = os.listdir(test_dir)
+no_classes = len(classes)
+
+    # functions
+    
+    
+def load_wav(wav_file):
+    contents = tf.io.read_file(wav_file)
+    wav, sample_rate = tf.audio.decode_wav(contents)
+    sample_rate = tf.cast(sample_rate, dtype=tf.int64)
+    wav = tfio.audio.resample(wav, rate_in=sample_rate, rate_out=256000)
+    waveform = tf.squeeze(wav, axis=-1)
+    return waveform
+
+
+def get_label(wav_file):
+    parts = tf.strings.split(input=wav_file, sep=os.path.sep)
+    return parts[-2]
+
+
+def get_waveform_and_label(wav_file):
+  label = get_label(wav_file)
+  waveform = load_wav(wav_file)
+  return waveform, label
+
+
+def get_spectrogram(waveform):
+    input_len = 256000
+    wav = waveform[:input_len]
+    zero_padding = tf.zeros([256000] - tf.shape(wav), dtype=tf.float32)
+    wav = tf.concat([zero_padding, wav], 0)
+    spectrogram = tfio.audio.spectrogram(wav, nfft=wl, window=wl, stride=hop)
+    spectrogram = tfio.audio.dbscale(spectrogram, top_db=80.00)
+    spectrogram = tf.expand_dims(spectrogram, axis=-1)
+    spectrogram = tf.image.grayscale_to_rgb(spectrogram)
+    spectrogram = preprocess_input(spectrogram)
+    return spectrogram
+    
+    
+def spectrogram_and_label(waveform, label):
+    spectrogram = get_spectrogram(waveform)
+    label_id = tf.argmax(label == folders)
+    return spectrogram, label_id
+
+   
+def preprocess_dataset(files):
+  files_ds = tf.data.Dataset.from_tensor_slices(files)
+  output_ds = files_ds.map(
+      map_func=get_waveform_and_label,
+      num_parallel_calls=AUTO)
+  output_ds = output_ds.map(
+      map_func=spectrogram_and_label,
+      num_parallel_calls=AUTO)
+  return output_ds
+    
+    
+def get_species(file_path):
+    species = file_path.split("/")[-2]
+    return species
+
+
+save_loc = "path _to_save_dir"
+filename = "filename"
+
+
+# preprocessing
+
+train_files = tf.io.gfile.glob(f"{train_dir}*/*.wav")
+  
+val_files = tf.io.gfile.glob(f"{val_dir}*/*.wav")
+test_files = tf.io.gfile.glob(f"{test_dir}*/*.wav")
+    
+train_files = tf.random.shuffle(train_files)
+val_files = tf.random.shuffle(val_files)
+
+train_ds = preprocess_dataset(train_files)
+val_ds = preprocess_dataset(val_files)
+test_ds = preprocess_dataset(test_files)
+
+spectrogram_ds = train_ds
+
+train_ds = train_ds.batch(batch_size)
+val_ds = val_ds.batch(batch_size)
+
+train_ds = train_ds.cache().prefetch(AUTO)
+val_ds = val_ds.cache().prefetch(AUTO)
+
+
+# building and training model
+    
+for spectrogram, _ in spectrogram_ds.take(1):
+  input_shape = spectrogram.shape
+
+
+# normalisation layer
+normalization_layer = layers.Rescaling(1./255)
+resize_layer = layers.Resizing(height, width)
+    
+# model definition
+    
+model_base = ResNet50(weights='imagenet', pooling=max,
+                      include_top=False,
+                      input_shape=(height, width, 3))
+
+model = models.Sequential()
+model.add(layers.Input(shape=input_shape))
+model.add(normalization_layer)
+model.add(resize_layer)
+model.add(model_base)
+model.add(layers.Flatten())
+model.add(layers.Dense(256, activation='relu'))
+model.add(layers.Dense(units=no_classes, activation='softmax'))
+
+checkpoint = ModelCheckpoint(
+    save_loc, monitor='val_accuracy', verbose=1,
+    save_best_only=True, save_weights_only=False, mode='auto')
+
+csv_log = CSVLogger(f"{save_loc}{filename}.csv",
+    separator=',', append=False)
+
+model.compile(optimizer=Adam(learning_rate=lrate),
+              loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+resNet50 = model.fit(
+    x=train_ds, validation_data=val_ds, epochs=100,
+    callbacks=[checkpoint, csv_log])
+    
+
+model.save(f"{save_loc}{filename}")
+model_json = model.to_json()
+with open(f"{save_loc}{filename}.json", "w") as json_file:
+    json_file.write(model_json)
+model.save_weights(f"{save_loc}{filename}.h5")
+
+
+    # plot performance
+    
+plt.plot(resNet50.history['loss'], label='train')
+plt.plot(resNet50.history['val_loss'], label='val')
+plt.title("Loss and Validation Loss")
+plt.legend()
+plt.show()
+plt.savefig(f"{save_loc}loss.png")
+plt.clf()
+
+plt.plot(resNet50.history['accuracy'], label='train')
+plt.plot(resNet50.history['val_accuracy'], label='val')
+plt.title("Accuracy and Validation Accuracy")
+plt.legend()
+plt.show()
+plt.savefig(f"{save_loc}accuracy.png")
+plt.clf()
+
+
+    # unpack audio and labels and filename 
+    
+test_audio = []
+test_labels = []
+
+for audio, label in test_ds:
+  test_audio.append(audio.numpy())
+  test_labels.append(label.numpy())
+
+test_audio = np.array(test_audio)
+test_labels = np.array(test_labels)
+
+test_labels
+
+spp = []
+
+for file in test_files:
+    species = get_species(file)
+    spp.append(species)
+
+
+# create dictionary
+
+sp_dict = dict(zip(test_labels, spp))
+species_dict = sorted(sp_dict.items(), key=lambda x: x[1], reverse=False)
+print ("species dictionary : " +  str(species_dict))
+
+with open(save_loc + '_labels.pkl', 'wb') as f:
+    pickle.dump(species_dict, f)
+    
+
+# confusion matrix
+
+predictions = model.predict(test_audio)
+y_pred = np.argmax(predictions, axis=1)
+y_true=test_labels
+
+test_acc = sum(y_pred == y_true) / len(y_true)
+
+cm = confusion_matrix(y_true=y_true, y_pred=y_pred)
+
+
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    print(cm)
+
+    thresh = cm.max() / 2
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j],
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Preditced label')
+    plt.savefig(save_loc + 'confusion_matrix.png')
+
+
+cm_plot_labels = folders
+
+plot_confusion_matrix(cm=cm, classes=cm_plot_labels,
+                      title="confusion matrix")
