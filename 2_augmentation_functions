@@ -1,0 +1,170 @@
+#### this code contains all the augmentation functions used and the combined effects and loops the functions to create a training dataset
+
+import os
+import numpy as np
+import librosa as lb
+import soundfile as sf
+from audiomentations import AddGaussianNoise, BandStopFilter, Shift, TimeMask
+
+source = "train_data/train/"
+dest = "train_data/aug_data/"
+noise_path = "path to noise files/"
+noise_files = os.listdir(noise_path)
+
+# augmentation functions
+
+def noise_ran():
+    ran_file = noise_files[np.random.randint(0, len(noise_files))]
+    noise, sr = lb.load(noise_path + ran_file, sr=None)
+    return noise
+
+
+def noise(audio, sr):
+    noise = noise_ran()
+    if len(audio) <= len(noise) + 1:
+        ns_slice = noise[0: len(audio)]
+    else:
+        start_ = np.random.randint(noise.shape[0]-len(audio))
+        ns_slice = noise[start_: start_ + len(audio)]
+    call = audio * np.random.uniform(
+            0.8, 1.2) + ns_slice * np.random.uniform(0, 0.1)
+    return call 
+  
+
+def gaussian(audio, sr):
+    gaussian_noise = AddGaussianNoise(
+        min_amplitude=0.002, max_amplitude=0.005, p=1)
+    call = gaussian_noise(audio, sr)
+    return call 
+
+
+def tshift(audio, sr):
+    timeshift = Shift(
+        min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+    call = timeshift(audio, sr)
+    return call
+
+def bandsf(audio, sr):
+    bandsf = BandStopFilter(min_center_freq=1000, max_center_freq=100000,
+        min_bandwidth_fraction=0.5, max_bandwidth_fraction=1, p=1)
+    call = bandsf(audio, sr)
+    return call
+
+
+def tmask(audio, sr):
+    t_mask = TimeMask(min_band_part=0.02, max_band_part=0.05, fade=False, p=1)
+    call = t_mask(audio, sr)
+    return call
+
+# combining functions
+
+def aug_single(func, audio, sr):
+    func_ = func
+    call = func_(audio, sr)
+    effect = func.__name__
+    return call, effect
+    
+
+def aug_ts(func_ts, audio, sr):
+    ts_call = tshift(audio, sr)
+    call = func_ts(ts_call, sr)
+    effect = "ts_" + func.__name__
+    return call, effect
+
+
+def aug_bsf(func_bsf, audio, sr):
+    bsf_call = bandsf(audio, sr)
+    call = func_bsf(bsf_call, sr)
+    effect = "bsf_" + func.__name__
+    return call, effect
+
+
+def aug_tm(func_tm, audio, sr):
+    tm_call = tmask(audio, sr)
+    call = func_tm(tm_call, sr)
+    effect = "tm_" + func.__name__
+    return call, effect
+
+
+def aug_ts_bsf(func_bsf, audio, sr):
+    ts_call = tshift(audio, sr)
+    ts_bsf_call = bandsf(ts_call, sr)
+    call = func_bsf(ts_bsf_call, sr)
+    effect = "ts_bsf_" + func.__name__
+    return call, effect
+
+
+def aug_ts_tm(func_tm, audio, sr):
+    ts_call = tshift(audio, sr)
+    ts_tm_call = tmask(ts_call, sr)
+    call = func_tm(ts_tm_call, sr)
+    effect = "ts_tm_" + func.__name__
+    return call, effect
+
+
+def aug_4(func_tm, audio, sr):
+    ts_call = tshift(audio, sr)
+    ts_bsf_call = bandsf(ts_call, sr)
+    ts_bsftm_call = tmask(ts_bsf_call, sr)
+    call = func_tm(ts_bsftm_call, sr)
+    effect = "ts_bsf_tm_" + func.__name__
+    return call, effect
+
+
+aug_ts_func = [bandsf]
+aug_bsf_func = [gaussian, noise, tmask]
+aug_tm_func = [gaussian, noise]
+
+folders = os.listdir(source)
+
+for aug in aug_effects:
+    for folder in folders:
+        if os.path.exists(f"{dest}/{aug}/{folder}") is False:
+            os.makedirs(f"{dest}/{aug}/{folder}")
+
+# looping augmentation functions to create training data
+
+for folder in folders:
+    files = os.listdir(f"{source}/{folder}")
+    for file in files:
+        if file.rsplit('.', 1)[-1] == "wav":
+            fname = file.rsplit('.', 1)[0]
+            audio, sr = lb.load(f"{source}/{folder}/{file}", sr=256000)
+            audio = audio[:sr]
+            for i in range(9):
+                print(f"processing......{file}")
+                for func in (aug_ts_func):
+
+                    call, effect = aug_single(func, audio, sr)
+                    print(
+                        f"processed {effect}/{folder}/{fname}_{effect}_{i}.wav")
+                    sf.write(
+                        file=f"{dest}/{effect}/{folder}/{fname}_{effect}_{i}.wav",
+                        data=call, samplerate=sr)
+
+                    call, effect = aug_ts(func, audio, sr)
+                    print(
+                        f"processed {effect}/{folder}/{fname}_{effect}_{i}.wav")
+                    sf.write(
+                        file=f"{dest}/{effect}/{folder}/{fname}_{effect}_{i}.wav",
+                        data=call, samplerate=sr)
+                for func in (aug_bsf_func):
+                    call, effect = aug_bsf(func, audio, sr)
+                    print(
+                        f"processed {effect}/{folder}/{fname}_{effect}_{i}.wav")
+                    sf.write(
+                        file=f"{dest}/{effect}/{folder}/{fname}_{effect}_{i}.wav",
+                        data=call, samplerate=sr)
+                for func in (aug_tm_func):
+                    call, effect = aug_ts_bsf(func, audio, sr)
+                    print(
+                        f"processed {effect}/{folder}/{fname}_{effect}_{i}.wav")
+                    sf.write(
+                        file=f"{dest}/{effect}/{folder}/{fname}_{effect}_{i}.wav",
+                        data=call, samplerate=sr)                   
+                    call, effect = aug_4(func, audio, sr)
+                    print(
+                        f"processed {effect}/{folder}/{fname}_{effect}_{i}.wav")
+                    sf.write(
+                        file=f"{dest}/{effect}/{folder}/{fname}_{effect}_{i}.wav",
+                        data=call, samplerate=sr)
