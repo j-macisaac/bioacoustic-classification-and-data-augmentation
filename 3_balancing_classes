@@ -1,0 +1,113 @@
+# augments data and create balanced dataset
+
+import os, warnings, random, math
+import numpy as np
+import librosa as lb
+import soundfile as sf
+from audiomentations import BandStopFilter, Shift, TimeMask
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
+np.set_printoptions(precision=4)
+
+# variables 
+
+aug_effects =['tshift', 'ts_noise', 'ts_bandsf', 'ts_tmask', 'ts_bsf_noise']
+
+
+# data paths
+
+train_dir = "train_data/train/"
+species = os.listdir(train_dir)
+
+
+# aug functions
+
+class augmentation:
+        
+    def noise_ran():
+        noise_path = "Bg_noise_1s/"
+        noise_files = os.listdir(noise_path)
+        ran_file = noise_files[np.random.randint(0, len(noise_files))]
+        noise, sr = lb.load(noise_path + ran_file, sr=None)
+        return noise
+        
+        
+    def noise(audio, sr):
+        noise = augmentation.noise_ran()
+        if len(audio) <= len(noise) + 1:
+            ns_slice = noise[0: len(audio)]
+        else:
+            start_ = np.random.randint(noise.shape[0]-len(audio))
+            ns_slice = noise[start_: start_ + len(audio)]
+        call = audio * np.random.uniform(0.8, 1.2) + ns_slice * np.random.uniform(0, 0.1)
+        return call 
+    
+    
+    def tshift(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        call = timeshift(audio, sr)
+        effect = "tshift"
+        return call, effect
+    
+    
+    def ts_tmask(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        tmask = TimeMask(min_band_part=0.02, max_band_part=0.05, fade=False, p=1)
+        call = tmask(ts_call, sr)
+        effect = "ts_tmask"
+        return call, effect
+    
+    
+    def ts_bandsf(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        bandsf = BandStopFilter(min_center_freq=1000, max_center_freq=100000,
+            min_bandwidth_fraction=0.5, max_bandwidth_fraction=1, p=1)
+        call = bandsf(ts_call, sr)
+        effect = "ts_bandsf"
+        return call, effect    
+    
+    def ts_noise(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        call = augmentation.noise(ts_call, sr)
+        effect = "ts_noise"
+        return call, effect
+    
+    
+    def ts_bsf_noise(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        ts_noise_call = augmentation.noise(ts_call, sr)
+        bandsf = BandStopFilter(min_center_freq=1000, max_center_freq=100000,
+            min_bandwidth_fraction=0.5, max_bandwidth_fraction=1, p=1)
+        call = bandsf(ts_noise_call, sr)
+        effect = "ts_bsf_noise"
+        return call, effect
+
+
+# create new directory and augment files
+        
+for sp in species:
+    files = os.listdir(f"{train_dir}/{sp}/")
+    if len(files) < 4000:
+        save_loc = f"train_data/{sp}/"
+        if os.path.exists(save_loc) is False:
+            os.makedirs(save_loc)
+        no_aug = 4000 - len(files)
+        rpt = math.ceil(no_aug / len(files))
+        
+        for file in files:
+            fname = file.rsplit('.', 1)[0]
+            audio, sr = lb.load(f"{train_dir}/{sp}/{file}", sr=256000)
+            audio = audio[:sr]
+            for i in range(rpt):
+                if len(os.listdir(f"{save_loc}/")) + len(files) < 4000:  
+                    print(f"processing......{file}")
+                    for func in random.sample(aug_effects, 1):
+                        func_ = getattr(augmentation, f"{func}")
+                        call, effect = func_(audio, sr)
+                        file = f"{save_loc}/{fname}_{effect}_{i}.wav"
+                        if os.path.exists(file) is False:
+                           sf.write(file=file, data=call, samplerate=sr)
