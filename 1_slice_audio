@@ -1,0 +1,45 @@
+import pandas as pd
+import librosa as lb
+import soundfile as sf
+import os
+
+annotations = pd.read_csv('path to annotation files')
+# the csv contains start and stop times of vocalisations in each wav file
+
+# executing file slice
+
+
+def slice_data(start, end, raw_data,  sr):
+    max_ind = len(raw_data)
+    start_ind = min(int(start * sr), max_ind)
+    end_ind = min(int(end * sr), max_ind)
+    return raw_data[start_ind: end_ind]
+
+
+species = annotations.species.unique()
+save_loc = "path to save directory"
+
+audio_text_loc = 'path to raw wav'
+
+for idx, row in annotations.iterrows():
+    filename = row['wav_file'].rsplit('.', 1)[0]
+    start = row['start']
+    end = row['end'] 
+    sp = row['species']
+    f = annotations.iloc[idx-1]['wav_file'].rsplit('.', 1)[0]
+    sr = row['sample_rate']
+
+    aud_loc = f"{audio_text_loc}/{filename}.wav"
+
+    if sp in filename:
+        n_filename = f"{filename}_seg_{str(round(start, 2))}.wav"
+    else:
+        n_filename = f"{filename}_{sp}_seg_{str(round(start, 2))}.wav"
+
+    path = f"{save_loc}{sp}/{n_filename}"
+   
+    data, samplingrate = lb.load(aud_loc, sr=None)
+    sliced_data = slice_data(
+        start=start, end=end, raw_data=data, sr=samplingrate)
+
+    sf.write(file=path, data=sliced_data, samplerate=samplingrate)
