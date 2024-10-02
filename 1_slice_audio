@@ -1,13 +1,15 @@
+""" code to segment audio in to 1 second files using start and stop time
+annotations"""
+
 import pandas as pd
 import librosa as lb
 import soundfile as sf
-import os
+
 
 annotations = pd.read_csv('path to annotation files')
 # the csv contains start and stop times of vocalisations in each wav file
 
 # executing file slice
-
 
 def slice_data(start, end, raw_data,  sr):
     max_ind = len(raw_data)
