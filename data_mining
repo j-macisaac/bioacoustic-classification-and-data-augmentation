@@ -1,0 +1,42 @@
+# R code for minining field data for vocalisations using spectrogram template 
+# matching
+
+library(monitoR)
+
+
+file_path<-"path to template files/"
+save_path<-"output directory"
+
+call_1<- makeCorTemplate(paste0(file_path, "template_1.wav"), 
+                         t.lim=c(0.3, 0.95), wl = 1024, 
+                         frq.lim = c(0, 100), name = "call_1")
+
+call_2<- makeCorTemplate(paste0(file_path, "template_2.wav"), 
+                         t.lim=c(1.55, 2.5), wl = 1024,
+                         frq.lim = c(0, 100), name = "call_2")
+
+call_3<- makeCorTemplate(paste0(file_path, "template_3.wav"), 
+                         t.lim=c(0.2, 1), wl = 1024,
+                         frq.lim = c(0, 100), name = "call_3")
+
+
+
+### combine templates
+
+all_temp <-combineCorTemplates(call_1, call_2, call_3)
+
+templateCutoff(all_temp)<-rep(0.4, 3)
+
+survey_dir <- "path to audio survey data "
+
+
+
+output<-batchCorMatch(
+  template = all_temp, dir.survey = survey_dir,
+  ext.template = "ct", ext.survey = "wav", cor.method = "pearson",
+  warn = TRUE,time.source = "fileinfo", show.prog = TRUE, tz = BST, fd.rat = 1)
+
+write.csv(output, paste0(save_path, "filename.csv"))
+
+
+
