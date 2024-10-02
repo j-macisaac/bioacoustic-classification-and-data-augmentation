@@ -1,5 +1,10 @@
-import os, itertools, pickle, warnings, random
-import pandas as pd
+# -*- coding: utf-8 -*-
+"""
+This code will load and preprocess training, validation and test wav datasets 
+into spectrograms for finetuning a ResNet 50 CNN
+"""
+
+import os, itertools, pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
@@ -10,29 +15,34 @@ from tensorflow.keras import models, layers, mixed_precision
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import ModelCheckpoint, CSVLogger
 
-
+#to speed up training
 policy = mixed_precision.Policy('mixed_float16')
 mixed_precision.set_global_policy(policy)
 
-warnings.simplefilter(action='ignore', category=FutureWarning)
-np.set_printoptions(precision=4)
-    
-       
+   
+# spectrogram, inputand training parameters       
 height, width = 224, 224
 wl, hop = 1024, 512
 arch = 'resNet50'
 batch_size = 32
 AUTO = tf.data.AUTOTUNE
 
+# paths to training data
 train_dir = "train_data/train/"
 val_dir = "train_data/val/"
 test_dir = "train_data/test/"
+
+# info for saving data
+save_loc = "path _to_save_dir"
+filename = "filename"
+
+#obtaining label information
 folders = np.array(tf.io.gfile.listdir(str(test_dir)))
 classes = os.listdir(test_dir)
 no_classes = len(classes)
 
-    # functions
-    
+
+# preprocessing functions   
     
 def load_wav(wav_file):
     contents = tf.io.read_file(wav_file)
@@ -74,26 +84,17 @@ def spectrogram_and_label(waveform, label):
 
    
 def preprocess_dataset(files):
-  files_ds = tf.data.Dataset.from_tensor_slices(files)
-  output_ds = files_ds.map(
-      map_func=get_waveform_and_label,
-      num_parallel_calls=AUTO)
-  output_ds = output_ds.map(
-      map_func=spectrogram_and_label,
-      num_parallel_calls=AUTO)
-  return output_ds
+    files_ds = tf.data.Dataset.from_tensor_slices(files)
+    output_ds = files_ds.map(
+        map_func=get_waveform_and_label,
+        num_parallel_calls=AUTO)
+    output_ds = output_ds.map(
+        map_func=spectrogram_and_label,
+        num_parallel_calls=AUTO)
+    return output_ds
     
     
-def get_species(file_path):
-    species = file_path.split("/")[-2]
-    return species
-
-
-save_loc = "path _to_save_dir"
-filename = "filename"
-
-
-# preprocessing
+# preprocessing wav files
 
 train_files = tf.io.gfile.glob(f"{train_dir}*/*.wav")
   
@@ -148,7 +149,7 @@ checkpoint = ModelCheckpoint(
 csv_log = CSVLogger(f"{save_loc}{filename}.csv",
     separator=',', append=False)
 
-model.compile(optimizer=Adam(learning_rate=lrate),
+model.compile(optimizer=Adam(learning_rate="insert learning rate"),
               loss='sparse_categorical_crossentropy', metrics=['accuracy'])
 
 resNet50 = model.fit(
@@ -156,6 +157,7 @@ resNet50 = model.fit(
     callbacks=[checkpoint, csv_log])
     
 
+# saving the model and weights
 model.save(f"{save_loc}{filename}")
 model_json = model.to_json()
 with open(f"{save_loc}{filename}.json", "w") as json_file:
@@ -163,7 +165,9 @@ with open(f"{save_loc}{filename}.json", "w") as json_file:
 model.save_weights(f"{save_loc}{filename}.h5")
 
 
-    # plot performance
+# model analysis
+
+# plot performance
     
 plt.plot(resNet50.history['loss'], label='train')
 plt.plot(resNet50.history['val_loss'], label='val')
@@ -184,38 +188,17 @@ plt.clf()
 
     # unpack audio and labels and filename 
     
-test_audio = []
+
 test_labels = []
 
-for audio, label in test_ds:
-  test_audio.append(audio.numpy())
+for label in test_ds:
   test_labels.append(label.numpy())
 
-test_audio = np.array(test_audio)
 test_labels = np.array(test_labels)
 
-test_labels
+# plotting confusion matrix
 
-spp = []
-
-for file in test_files:
-    species = get_species(file)
-    spp.append(species)
-
-
-# create dictionary
-
-sp_dict = dict(zip(test_labels, spp))
-species_dict = sorted(sp_dict.items(), key=lambda x: x[1], reverse=False)
-print ("species dictionary : " +  str(species_dict))
-
-with open(save_loc + '_labels.pkl', 'wb') as f:
-    pickle.dump(species_dict, f)
-    
-
-# confusion matrix
-
-predictions = model.predict(test_audio)
+predictions = model.predict(test_ds)
 y_pred = np.argmax(predictions, axis=1)
 y_true=test_labels
 
@@ -253,3 +236,5 @@ cm_plot_labels = folders
 
 plot_confusion_matrix(cm=cm, classes=cm_plot_labels,
                       title="confusion matrix")
+
+
