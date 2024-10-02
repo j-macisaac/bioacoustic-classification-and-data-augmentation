@@ -1,8 +1,11 @@
+""" Code for training a Conv10 model with greyscale spectrograms - wav files
+are converted to greyscale spectrogram input in order to train a 10 layer ConvNet """
+
+
 import tensorflow as tf
 import tensorflow_io as tfio
-import os, itertools, pickle, warnings
+import os, itertools, pickle
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
 from tensorflow.keras import mixed_precision
 from tensorflow.keras.models import Sequential
@@ -12,20 +15,19 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import ModelCheckpoint
 from sklearn.metrics import confusion_matrix
 
-
+# for fater training
 policy = mixed_precision.Policy('mixed_float16')
 mixed_precision.set_global_policy(policy)
   
-warnings.simplefilter(action='ignore', category=FutureWarning)
-np.set_printoptions(precision=4)
 
 # variables 
-height, width = 224, 224
-wl, hop = 1024, 512
+height, width = 224, 224 # input dimensions
+wl, hop = 1024, 512 # spectogram settings
 batch_size = 32
-lrate = 0.0001
+lrate = 0.0001 # learning rate
 AUTO = tf.data.AUTOTUNE
 
+# data directories and label information
 
 train_dir = "train_data/train/"
 val_dir = "train_data/val/"
@@ -35,7 +37,7 @@ classes = os.listdir(test_dir)
 no_classes = len(classes)
   
   
-  # functions
+# preprocessing functions
   
   
 def load_wav(wav_file):
@@ -85,9 +87,7 @@ def preprocess_dataset(files):
     return output_ds
       
     
-def get_species(file_path):
-      species = file_path.split("/")[-2]
-      return species
+
 
   
 # save path
@@ -97,7 +97,7 @@ filename = "filename"
 if os.path.exists(save_loc) is False:
     os.makedirs(save_loc)
 
-  # preprocessing
+# preprocessing
 
 train_files = tf.io.gfile.glob(f"{train_dir}*/*.wav")    
 val_files = tf.io.gfile.glob(f"{val_dir}*/*.wav")
@@ -178,13 +178,14 @@ conv = model.fit(
 x=train_ds, validation_data=val_ds, epochs=100,
 callbacks=[checkpoint, csv_log])
 
+# saving model and weights
 model.save(save_loc + filename)
 model_json = model.to_json()
 with open(f"{save_loc}{filename}.json", "w") as json_file:
     json_file.write(model_json)
 model.save_weights(f"{save_loc}{filename}.h5")
 
-  # plot performance
+# plotting training curves
   
 plt.plot(conv.history['loss'], label='train')
 plt.plot(conv.history['val_loss'], label='val')
@@ -203,39 +204,18 @@ plt.savefig(save_loc + 'accuracy.png')
 plt.clf()
 
 
-# unpack audio and labels and filename
+# plotting confusion matrix
  
-test_audio = []
+
 test_labels = []
   
-for audio, label in test_ds:
-    test_audio.append(audio.numpy())
+for label in test_ds:
     test_labels.append(label.numpy())
   
-test_audio = np.array(test_audio)
 test_labels = np.array(test_labels)
 
-test_labels
 
-spp = []
-
-for file in test_files:
-    species = get_species(file)
-    spp.append(species)
-
-
-# create dictionary
-  
-sp_dict = dict(zip(test_labels, spp))
-species_dict = sorted(sp_dict.items(), key=lambda x: x[1], reverse=False)
-
-  
-with open(save_loc + '_labels.pkl', 'wb') as f:
-    pickle.dump(species_dict, f) 
-  
-  # confusion matrix
-  
-predictions = model.predict(test_audio)
+predictions = model.predict(test_ds)
 y_pred = np.argmax(predictions, axis=1)
 y_true=test_labels
 
