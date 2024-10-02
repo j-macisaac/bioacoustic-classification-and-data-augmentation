@@ -1,254 +1,112 @@
-""" Code for training a Conv10 model with greyscale spectrograms - wav files
-are converted to greyscale spectrogram input in order to train a 10 layer ConvNet """
+""" This code augments training data using 5 augmentation effects
+to create a balanced dataset of 4000 examples per species """
 
 
-import tensorflow as tf
-import tensorflow_io as tfio
-import os, itertools, pickle
-import matplotlib.pyplot as plt
+import os, random, math
 import numpy as np
-from tensorflow.keras import mixed_precision
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPool2D, Dropout
-from tensorflow.keras.layers import Input, Resizing
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import ModelCheckpoint
-from sklearn.metrics import confusion_matrix
-
-# for fater training
-policy = mixed_precision.Policy('mixed_float16')
-mixed_precision.set_global_policy(policy)
-  
+import librosa as lb
+import soundfile as sf
+from audiomentations import BandStopFilter, Shift, TimeMask
 
 # variables 
-height, width = 224, 224 # input dimensions
-wl, hop = 1024, 512 # spectogram settings
-batch_size = 32
-lrate = 0.0001 # learning rate
-AUTO = tf.data.AUTOTUNE
 
-# data directories and label information
+aug_effects =['tshift', 'ts_noise', 'ts_bandsf', 'ts_tmask', 'ts_bsf_noise']
+
+# data paths
 
 train_dir = "train_data/train/"
-val_dir = "train_data/val/"
-test_dir = "train_data/test/"
-folders = np.array(tf.io.gfile.listdir(str(test_dir)))
-classes = os.listdir(test_dir)
-no_classes = len(classes)
-  
-  
-# preprocessing functions
-  
-  
-def load_wav(wav_file):
-    contents = tf.io.read_file(wav_file)
-    wav, sample_rate = tf.audio.decode_wav(contents)
-    sample_rate = tf.cast(sample_rate, dtype=tf.int64)
-    waveform = tf.squeeze(wav, axis=-1)
-    return waveform
-  
-  
-def get_label(wav_file):
-    parts = tf.strings.split(input=wav_file, sep=os.path.sep)
-    return parts[-2]
-  
-  
-def get_waveform_and_label(wav_file):
-    label = get_label(wav_file)
-    waveform = load_wav(wav_file)
-    return waveform, label
-  
-  
-def get_spectrogram(waveform):
-      input_len = 256000
-      wav = waveform[:input_len]
-      zero_padding = tf.zeros([256000] - tf.shape(wav), dtype=tf.float32)
-      wav = tf.concat([zero_padding, wav], 0)
-      spectrogram = tfio.audio.spectrogram(wav, nfft=wl, window=wl, stride=hop)
-      spectrogram = tfio.audio.dbscale(spectrogram, top_db=80.00)
-      spectrogram = tf.expand_dims(spectrogram, axis=-1)
-      return spectrogram
-  
-  
-def spectrogram_and_label(waveform, label):
-      spectrogram = get_spectrogram(waveform)
-      label_id = tf.argmax(label == folders)
-      return spectrogram, label_id
-  
-  
-def preprocess_dataset(files):
-    files_ds = tf.data.Dataset.from_tensor_slices(files)
-    output_ds = files_ds.map(
-    map_func=get_waveform_and_label,
-    num_parallel_calls=AUTO)
-    output_ds = output_ds.map(
-    map_func=spectrogram_and_label,
-    num_parallel_calls=AUTO)
-    return output_ds
-      
+species = os.listdir(train_dir)
+
+
+# augmentation functions
+
+class augmentation:
+        
+    def noise_ran():
+        noise_path = "Bg_noise_1s/"
+        noise_files = os.listdir(noise_path)
+        ran_file = noise_files[np.random.randint(0, len(noise_files))]
+        noise, sr = lb.load(noise_path + ran_file, sr=None)
+        return noise
+        
+        
+    def noise(audio, sr):
+        noise = augmentation.noise_ran()
+        if len(audio) <= len(noise) + 1:
+            ns_slice = noise[0: len(audio)]
+        else:
+            start_ = np.random.randint(noise.shape[0]-len(audio))
+            ns_slice = noise[start_: start_ + len(audio)]
+        call = audio * np.random.uniform(0.8, 1.2) + ns_slice * np.random.uniform(0, 0.1)
+        return call 
     
+    
+    def tshift(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        call = timeshift(audio, sr)
+        effect = "tshift"
+        return call, effect
+    
+    
+    def ts_tmask(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        tmask = TimeMask(min_band_part=0.02, max_band_part=0.05, fade=False, p=1)
+        call = tmask(ts_call, sr)
+        effect = "ts_tmask"
+        return call, effect
+    
+    
+    def ts_bandsf(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        bandsf = BandStopFilter(min_center_freq=1000, max_center_freq=100000,
+            min_bandwidth_fraction=0.5, max_bandwidth_fraction=1, p=1)
+        call = bandsf(ts_call, sr)
+        effect = "ts_bandsf"
+        return call, effect    
+    
+    def ts_noise(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        call = augmentation.noise(ts_call, sr)
+        effect = "ts_noise"
+        return call, effect
+    
+    
+    def ts_bsf_noise(audio, sr):
+        timeshift = Shift(min_fraction=-0.25, max_fraction=0.25, rollover=True, p=1)
+        ts_call = timeshift(audio, sr)
+        ts_noise_call = augmentation.noise(ts_call, sr)
+        bandsf = BandStopFilter(min_center_freq=1000, max_center_freq=100000,
+            min_bandwidth_fraction=0.5, max_bandwidth_fraction=1, p=1)
+        call = bandsf(ts_noise_call, sr)
+        effect = "ts_bsf_noise"
+        return call, effect
 
 
-  
-# save path
-save_loc = "path_to_save_dir"
-filename = "filename"
-
-if os.path.exists(save_loc) is False:
-    os.makedirs(save_loc)
-
-# preprocessing
-
-train_files = tf.io.gfile.glob(f"{train_dir}*/*.wav")    
-val_files = tf.io.gfile.glob(f"{val_dir}*/*.wav")
-test_files = tf.io.gfile.glob(f"{test_dir}*/*.wav")
-
-train_files = tf.random.shuffle(train_files)
-val_files = tf.random.shuffle(val_files)
-
-train_ds = preprocess_dataset(train_files)
-val_ds = preprocess_dataset(val_files)
-test_ds = preprocess_dataset(test_files)
-
-spec_ds = train_ds
-
-train_ds = train_ds.batch(batch_size)
-val_ds = val_ds.batch(batch_size)
-train_ds = train_ds.cache().prefetch(AUTO)
-val_ds = val_ds.cache().prefetch(AUTO)
-
-for spectrogram, _ in spec_ds.take(1):
-    input_shape = spectrogram.shape
-
-  # building and training model
-  
-normalization_layer = tf.keras.layers.Rescaling(1.0/255)
-resize_layer = Resizing(height, width)
-
-# model definition
-
-model = Sequential([
-Input(shape=input_shape),
-resize_layer,
-normalization_layer,
-Conv2D(filters=32, kernel_size=(3, 3), activation='relu',
-       padding='same'),
-Conv2D(filters=64, kernel_size=(3, 3), activation='relu', padding='same'),
-MaxPool2D(pool_size=(2, 2), strides=2),
-Dropout(0.25),
-Conv2D(filters=64, kernel_size=(3, 3), activation='relu', padding='same'),
-Conv2D(filters=128, kernel_size=(3, 3), activation='relu', padding='same'),
-MaxPool2D(pool_size=(2, 2), strides=2),
-Dropout(0.25),
-Conv2D(filters=128, kernel_size=(3, 3), activation='relu', padding='same'),
-Conv2D(filters=256, kernel_size=(3, 3), activation='relu', padding='same'),
-MaxPool2D(pool_size=(2, 2), strides=2),
-Conv2D(filters=256, kernel_size=(3, 3), activation='relu', padding='same'),
-Conv2D(filters=256, kernel_size=(3, 3), activation='relu', padding='same'),
-MaxPool2D(pool_size=(2, 2), strides=2),
-Dropout(0.25),
-Conv2D(filters=256, kernel_size=(3, 3), activation='relu', padding='same'),
-Conv2D(filters=256, kernel_size=(3, 3), activation='relu', padding='same'),
-MaxPool2D(pool_size=(2, 2), strides=2),
-Dropout(0.25),
-Flatten(),
-Dense(256, activation='relu'),
-Flatten(),
-Dense(units=no_classes,
-      activation='softmax',
-      dtype="float32"),
-])
- 
-  
-checkpoint = ModelCheckpoint(
-save_loc, monitor='val_accuracy', verbose=1,
-save_best_only=True, save_weights_only=False, mode='auto')
-
-csv_log = tf.keras.callbacks.CSVLogger(
-f"{save_loc}{filename}.csv",
-separator=',',
-append=False)
-  
-model.compile(optimizer=Adam(learning_rate=lrate),
-          loss='sparse_categorical_crossentropy',
-          jit_compile=True,
-          metrics=['accuracy'])
-  
-conv = model.fit(
-x=train_ds, validation_data=val_ds, epochs=100,
-callbacks=[checkpoint, csv_log])
-
-# saving model and weights
-model.save(save_loc + filename)
-model_json = model.to_json()
-with open(f"{save_loc}{filename}.json", "w") as json_file:
-    json_file.write(model_json)
-model.save_weights(f"{save_loc}{filename}.h5")
-
-# plotting training curves
-  
-plt.plot(conv.history['loss'], label='train')
-plt.plot(conv.history['val_loss'], label='val')
-plt.title(f"Loss and Validation Loss (Adam LR = {lrate})")
-plt.legend()
-plt.show()
-plt.savefig(save_loc + 'loss.png')
-plt.clf()
-
-plt.plot(conv.history['accuracy'], label='train')
-plt.plot(conv.history['val_accuracy'], label='val')
-plt.title(f"Accuracy and Validation Accuracy (Adam LR = {lrate})")
-plt.legend()
-plt.show()
-plt.savefig(save_loc + 'accuracy.png')
-plt.clf()
-
-
-# plotting confusion matrix
- 
-
-test_labels = []
-  
-for label in test_ds:
-    test_labels.append(label.numpy())
-  
-test_labels = np.array(test_labels)
-
-
-predictions = model.predict(test_ds)
-y_pred = np.argmax(predictions, axis=1)
-y_true=test_labels
-
-test_acc = sum(y_pred == y_true) / len(y_true)
-
-  
-cm = confusion_matrix(y_true=y_true, y_pred=y_pred)
-
-def plot_confusion_matrix(cm, classes,
-                      normalize=False,
-                      title='Confusion matrix',
-                      cmap=plt.cm.Blues):
-    plt.imshow(cm, interpolation='nearest', cmap=cmap)
-    plt.title(title)
-    plt.colorbar()
-    tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes, rotation=45)
-    plt.yticks(tick_marks, classes)
-
-    print(cm)
-
-    thresh = cm.max() / 2
-    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        plt.text(j, i, cm[i, j],
-                 horizontalalignment="center",
-                 color="white" if cm[i, j] > thresh else "black")
-
-    plt.tight_layout()
-    plt.ylabel('True label')
-    plt.xlabel('Preditced label')
-    plt.savefig(save_loc + 'confusion_matrix.png')
-
-cm_plot_labels = folders
-plot_confusion_matrix(cm=cm,
-                      classes=cm_plot_labels, 
-                      title="confusion matrix")
+# create new directory and augment files to create dataset 
+# with 4000 examples per species
+        
+for sp in species:
+    files = os.listdir(f"{train_dir}/{sp}/")
+    if len(files) < 4000:
+        save_loc = f"train_data/{sp}/"
+        if os.path.exists(save_loc) is False:
+            os.makedirs(save_loc)
+        no_aug = 4000 - len(files)
+        rpt = math.ceil(no_aug / len(files))
+        
+        for file in files:
+            fname = file.rsplit('.', 1)[0]
+            audio, sr = lb.load(f"{train_dir}/{sp}/{file}", sr=256000)
+            audio = audio[:sr]
+            for i in range(rpt):
+                if len(os.listdir(f"{save_loc}/")) + len(files) < 4000:  
+                    print(f"processing......{file}")
+                    for func in random.sample(aug_effects, 1):
+                        func_ = getattr(augmentation, f"{func}")
+                        call, effect = func_(audio, sr)
+                        file = f"{save_loc}/{fname}_{effect}_{i}.wav"
+                        if os.path.exists(file) is False:
+                           sf.write(file=file, data=call, samplerate=sr)
