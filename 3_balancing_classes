@@ -1,18 +1,16 @@
-# augments data and create balanced dataset
+""" This code augments training data using 5 augmentation effects
+to create a balanced dataset of 4000 examples per species """
 
-import os, warnings, random, math
+
+import os, random, math
 import numpy as np
 import librosa as lb
 import soundfile as sf
 from audiomentations import BandStopFilter, Shift, TimeMask
 
-warnings.simplefilter(action='ignore', category=FutureWarning)
-np.set_printoptions(precision=4)
-
 # variables 
 
 aug_effects =['tshift', 'ts_noise', 'ts_bandsf', 'ts_tmask', 'ts_bsf_noise']
-
 
 # data paths
 
@@ -20,7 +18,7 @@ train_dir = "train_data/train/"
 species = os.listdir(train_dir)
 
 
-# aug functions
+# augmentation functions
 
 class augmentation:
         
@@ -87,7 +85,8 @@ class augmentation:
         return call, effect
 
 
-# create new directory and augment files
+# create new directory and augment files to create dataset 
+# with 4000 examples per species
         
 for sp in species:
     files = os.listdir(f"{train_dir}/{sp}/")
