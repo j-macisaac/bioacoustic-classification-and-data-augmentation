@@ -1,4 +1,6 @@
-#### this code contains all the augmentation functions used and the combined effects and loops the functions to create a training dataset
+""" This code contains the functions to augment wav files using
+20 different effects and a processing loop to create a training dataset """
+
 
 import os
 import numpy as np
@@ -117,10 +119,6 @@ aug_tm_func = [gaussian, noise]
 
 folders = os.listdir(source)
 
-for aug in aug_effects:
-    for folder in folders:
-        if os.path.exists(f"{dest}/{aug}/{folder}") is False:
-            os.makedirs(f"{dest}/{aug}/{folder}")
 
 # looping augmentation functions to create training data
 
